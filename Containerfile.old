@@ -1,0 +1,79 @@
+FROM debian:latest
+
+ARG USER_ID=1000
+ARG USER=steam
+ARG HOME_DIR="/home/${USER}"
+
+ENV STEAM_DIR "${HOME_DIR}/steam"
+ENV HLDS_DIR "${HOME_DIR}/hlds"
+
+# install dependencies
+RUN apt-get update && \
+    apt-get install -y lib32gcc-s1 curl lib32stdc++6 xz-utils libarchive-tools
+
+# create user for steam
+RUN useradd --uid "${USER_ID}" -g 0 -N --create-home "${USER}"
+USER ${USER}
+
+# install steamcmd
+RUN mkdir -p "${STEAM_DIR}" && cd "${STEAM_DIR}" && \
+    curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar zxvf -
+
+# install hlds + cstrike
+RUN mkdir -p "${HLDS_DIR}" && \
+    "${STEAM_DIR}/steamcmd.sh" +force_install_dir "${HLDS_DIR}" +login anonymous +app_update "90 -beta steam_legacy" validate +quit && \
+    # see https://developer.valvesoftware.com/wiki/SteamCMD#Unable_to_locate_a_running_instance_of_Steam
+    mkdir -p "${HLDS_DIR}/.steam/sdk32" && \
+    ln -s "${STEAM_DIR}/linux32/steamclient.so" "${HLDS_DIR}/.steam/sdk32/steamclient.so" && \
+    rm -rf /tmp/dumps && \
+    chmod -R 775 /home/steam
+
+# install rehlds
+COPY --chown=steam:0 --chmod=775 ./rehlds/bin/linux32 ${HLDS_DIR}
+
+
+# add custom maps
+ADD --chown=steam:0 --chmod=775 maps/* "${HLDS_DIR}/cstrike/maps/"
+RUN cd "${HLDS_DIR}/cstrike/maps/" && \
+    ls -1 *.bsp | sed -e "s/\..*$//" > "${HLDS_DIR}/cstrike/mapcycle.txt"
+
+# install metamod
+RUN mkdir -p "${HLDS_DIR}/cstrike/addons/metamod/dlls" && \
+    curl -sqL "https://github.com/Bots-United/metamod-p/releases/download/v1.21p38/metamod_i686_linux_win32-1.21p38.tar.xz" | tar -C "${HLDS_DIR}/cstrike/addons/metamod/dlls" -xJvf - && \
+    sed -i "s/dlls\/cs.so/addons\/metamod\/dlls\/metamod_i386.so/" "${HLDS_DIR}/cstrike/liblist.gam"
+
+# install amx mod
+RUN curl -sqL "https://github.com/alliedmodders/amxmodx/releases/download/1.10.0.5476/amxmodx-1.10.0-git5476-base-linux.tar.gz" | tar -C "${HLDS_DIR}/cstrike/" -zxvf - && \
+    curl -sqL "https://github.com/alliedmodders/amxmodx/releases/download/1.10.0.5476/amxmodx-1.10.0-git5476-cstrike-linux.tar.gz" | tar -C "${HLDS_DIR}/cstrike/" -zxvf - && \
+    curl -sqL "https://github.com/SuperCentral-Gaming-Community/AMX-Super-5.0.2/releases/download/5.0.2c/AMX-Super-5.0.2c.zip" | bsdtar -xf - -C "${HLDS_DIR}/cstrike/addons/amxmodx/" --strip-components 1 && \
+    curl -qL --output "${HLDS_DIR}/cstrike/addons/amxmodx/plugins/amx_thunder.amxx"  "https://www.amxmodx.org/plcompiler_vb.cgi?file_id=39346" && \
+    echo "linux addons/amxmodx/dlls/amxmodx_mm_i386.so" >> "${HLDS_DIR}/cstrike/addons/metamod/plugins.ini" && \
+    rm "${HLDS_DIR}/cstrike/addons/amxmodx/configs/maps.ini"
+# Config amx
+RUN sed -i '/telemenu/s/;//' ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini && \
+    sed -i '/miscstats/s/;//' ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini && \
+    sed -i '/restmenu/s/;//' ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini && \
+    sed -i '/stats_logging/s/;//' ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini && \
+    echo "amx_super-serious.amxx" >> ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini && \
+    echo "amx_super-menu.amxx" >> ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini && \
+    echo "amx_super-fun.amxx" >> ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini && \
+    echo "amx_super-other.amxx" >> ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini && \
+    echo "amx_super-cmdmanager.amxx" >> ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini && \
+    echo "amx_thunder.amxx" >> ${HLDS_DIR}/cstrike/addons/amxmodx/configs/plugins.ini 
+
+
+RUN mkdir -p /home/steam/hlds/cstrike/pdata && \
+    ln -sf /home/steam/hlds/cstrike/pdata/stats.ini /home/steam/hlds/cstrike/addons/amxmodx/configs/stats.ini && \
+    ln -s /home/steam/hlds/cstrike/pdata/csstats.dat /home/steam/hlds/cstrike/addons/amxmodx/data/csstats.dat && \
+    ln -s /home/steam/hlds/cstrike/pdata/banned.cfg /home/steam/hlds/cstrike/banned.cfg && \
+    ln -s /home/steam/hlds/cstrike/pdata/qconsole.log /home/steam/hlds/cstrike/qconsole.log && \
+    ln -s /home/steam/hlds/cstrike/pdata/listip.cfg /home/steam/hlds/cstrike/listip.cfg
+
+EXPOSE 27015/TCP
+EXPOSE 27015/UDP
+EXPOSE 27020/UDP
+EXPOSE 26900/UDP
+COPY --chown=steam:0 --chmod=775 ./entrypoint.sh /
+
+WORKDIR ${HLDS_DIR}
+ENTRYPOINT "/entrypoint.sh"
